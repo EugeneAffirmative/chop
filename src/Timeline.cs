@@ -26,6 +26,7 @@ namespace Chop
         public event Action<int, bool> TrimBegin;                  // seg, left edge
         public event Action<int, bool, double> TrimMove;           // seg, left edge, new source time
         public event Action TrimEnd;
+        public event Action ScrubStarted;                          // a click-drag began (not a plain click)
         public event Action<Point> ContextRequested;
 
         readonly float f;
@@ -34,6 +35,7 @@ namespace Chop
         Drag drag;
         int trimSeg; bool trimLeft; double trimOrigSrc, trimOrigT; int panX0; double panVs0;
         int hoverX = -1;
+        int downX; bool scrubbing;
 
         static readonly Color Bg = Color.FromArgb(22, 22, 26), RulerBg = Color.FromArgb(28, 28, 33), TextC = Color.FromArgb(160, 160, 172);
         static readonly Color SegA = Color.FromArgb(38, 84, 170), SegB = Color.FromArgb(32, 72, 148), SegCur = Color.FromArgb(48, 104, 206);
@@ -328,6 +330,7 @@ namespace Chop
             if (e.Button == MouseButtons.Middle) { drag = Drag.Pan; panX0 = e.X; panVs0 = ViewStart; Capture = true; return; }
             if (e.Button != MouseButtons.Left) return;
             Capture = true;
+            downX = e.X; scrubbing = false;
             if (e.Y < RulerY - 1) { drag = Drag.Overview; OverviewSeek(e.X); return; }
             bool left = false;
             int seg = e.Y >= TrackY ? EdgeHit(e.X, out left) : -1;
@@ -361,6 +364,12 @@ namespace Chop
         {
             base.OnMouseMove(e);
             if (Model == null) return;
+            // a click just seeks; once the mouse actually drags it's a scrub, which pauses playback
+            if ((drag == Drag.Scrub || drag == Drag.Overview) && !scrubbing && Math.Abs(e.X - downX) > 3 * f)
+            {
+                scrubbing = true;
+                var hs = ScrubStarted; if (hs != null) hs();
+            }
             switch (drag)
             {
                 case Drag.Scrub: Scrub(e.X, false); return;

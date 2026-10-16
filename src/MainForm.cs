@@ -79,6 +79,7 @@ namespace Chop
             tl.TrimBegin += OnTrimBegin;
             tl.TrimMove += OnTrimMove;
             tl.TrimEnd += OnTrimEnd;
+            tl.ScrubStarted += PauseForScrub;
             tl.ContextRequested += ShowContext;
 
             bar = new Panel { Dock = DockStyle.Top, Height = (int)(46 * f), BackColor = Theme.Bar };
@@ -538,9 +539,13 @@ namespace Chop
             }
         }
 
+        /// <summary>Dragging on the timeline pauses playback (seeking under a playing video stutters).</summary>
+        void PauseForScrub() { if (!paused && mpv != null) mpv.Set("pause", "yes"); }
+
         void OnTrimBegin(int seg, bool left)
         {
             trimming = true;
+            PauseForScrub();
             model.BeginGesture();
             trimEdge = left ? model.CumStart(seg) : model.CumStart(seg) + model.Segs[seg].Len - model.FrameDur;
         }

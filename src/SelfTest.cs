@@ -66,15 +66,42 @@ namespace Chop
                 await Settle(800);
                 mpv.Set("pause", "yes"); await Settle(300);
                 TLog("ready segs=" + SegsText() + " frameDur=" + model.FrameDur.ToString(Tools.Inv));
+                string taken = Path.Combine(Path.GetDirectoryName(path), "taken.mp4");
+                File.WriteAllText(taken, "");
                 using (var d = new ExportDialog(f, path, ".mp4", "0:10.000 long  ·  exact cuts  ·  Tab switches in the editor"))
                 {
                     d.StartPosition = FormStartPosition.Manual; d.Location = new Point(-4000, -4000);
                     d.Show(this); await Settle(200);
-                    using (var bmp = new Bitmap(d.Width, d.Height)) { d.DrawToBitmap(bmp, new Rectangle(Point.Empty, d.Size)); bmp.Save(Path.Combine(SelfTestDir, "export_dialog.png")); }
-                    var cb = (CheckBox)d.Controls[5]; cb.Checked = true; await Settle(100);
-                    using (var bmp = new Bitmap(d.Width, d.Height)) { d.DrawToBitmap(bmp, new Rectangle(Point.Empty, d.Size)); bmp.Save(Path.Combine(SelfTestDir, "export_dialog_replace.png")); }
+                    Action<string> shot = n => { using (var bmp = new Bitmap(d.Width, d.Height)) { d.DrawToBitmap(bmp, new Rectangle(Point.Empty, d.Size)); bmp.Save(Path.Combine(SelfTestDir, n + ".png")); } };
+                    Action<string> log = what => TLog("NAME " + what + " -> canExport=" + d.CanExport + " error='" + d.ErrorText + "'");
+                    log("default (original name)"); shot("dlg_1_default");
+                    d.SetReplaceForTest(true); await Settle(50); log("original + replace"); shot("dlg_2_replace");
+                    d.SetReplaceForTest(false);
+                    d.SetNameForTest("taken"); log("'taken' (exists)"); shot("dlg_3_taken");
+                    d.SetNameForTest("bad:name"); log("'bad:name'"); shot("dlg_4_bad");
+                    d.SetNameForTest("clip.mkv"); log("'clip.mkv'");
+                    d.SetNameForTest("my new clip.mp4"); log("'my new clip.mp4'");
+                    d.SetNameForTest("my new clip"); log("'my new clip'"); shot("dlg_5_ok");
+                    d.SetNameForTest("   "); log("blank");
+                    d.SetNameForTest("CON"); log("'CON'");
                     d.Close();
                 }
+                File.Delete(taken);
+
+                // scrubbing: a drag pauses playback, a plain click keeps playing
+                Func<int, int, IntPtr> lp = (x, y) => (IntPtr)((y << 16) | (x & 0xFFFF));
+                int ty = tl.Height - (int)(8 * f), tx = tl.Width / 3;
+                mpv.Set("pause", "no"); await Settle(400);
+                PostMessage(tl.Handle, 0x0201, (IntPtr)1, lp(tx, ty)); PostMessage(tl.Handle, 0x0202, IntPtr.Zero, lp(tx, ty));
+                await Settle(500);
+                TLog("SCRUB plain click while playing -> paused=" + paused);
+                mpv.Set("pause", "no"); await Settle(400);
+                PostMessage(tl.Handle, 0x0201, (IntPtr)1, lp(tx, ty));
+                for (int i = 1; i <= 6; i++) { PostMessage(tl.Handle, 0x0200, (IntPtr)1, lp(tx + i * 12, ty)); await Task.Delay(40); }
+                PostMessage(tl.Handle, 0x0202, IntPtr.Zero, lp(tx + 72, ty));
+                await Settle(500);
+                TLog("SCRUB drag while playing -> paused=" + paused);
+                mpv.Set("pause", "yes"); await Settle(300);
 
                 k = Math.Min(1, model.Duration / 40);
                 await SeekT(5.0 * k); Shot("01_seek5_expect300");
@@ -134,7 +161,9 @@ namespace Chop
                 mpv.Set("volume", "70"); await Settle(300);
                 TLog(string.Format(Tools.Inv, "VOLUME mpv=70 slider={0}", vol.Volume));
 
-                // fullscreen popup
+                // fullscreen popup (CHOP_SELFTEST_FULLSCREEN=0 skips it so it doesn't take over the screen)
+                if (Environment.GetEnvironmentVariable("CHOP_SELFTEST_FULLSCREEN") != "0")
+                {
                 ToggleFullscreen(); await Settle(500);
                 FlashOverlay(); await Settle(500);
                 ShowMenu(); await Settle(600);
@@ -176,6 +205,7 @@ namespace Chop
                     DrawToBitmap(bmp, new Rectangle(Point.Empty, ClientSize));
                     bmp.Save(Path.Combine(SelfTestDir, "ui_after_fullscreen.png"));
                 }
+                } // fullscreen section
 
                 StartExport(Path.Combine(Path.GetDirectoryName(path), Path.GetFileNameWithoutExtension(path) + " (cut)" + Path.GetExtension(path)), false);
                 for (int i = 0; i < 600 && exporting; i++) await Task.Delay(100);

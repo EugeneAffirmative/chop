@@ -7,8 +7,9 @@ using System.Windows.Forms;
 namespace Chop
 {
     /// <summary>
-    /// Export: pick the name (and folder), and optionally replace the original clip.
-    /// Enter exports, Esc cancels. Anything that would be overwritten goes to the Recycle Bin.
+    /// Export: the file is saved under exactly the name typed (the extension is added if left off).
+    /// Names that are taken or that Windows won't accept are flagged in red and can't be used; the
+    /// clip's own name is only allowed with "Replace the original clip" ticked. Enter exports, Esc cancels.
     /// </summary>
     class ExportDialog : Form
     {
@@ -18,12 +19,15 @@ namespace Chop
         public bool ReplaceOriginal { get { return replaceBox.Checked; } }
 
         readonly float f;
-        readonly string source, ext, defaultName;
+        readonly string source, ext;
         string folder;
         readonly TextBox nameBox;
-        readonly Label extLbl, folderLbl, noteLbl;
+        readonly Label extLbl, errorLbl, folderLbl, noteLbl;
         readonly CheckBox replaceBox;
         readonly FlatButton okBtn, cancelBtn, browseBtn;
+        static readonly Color ErrorRed = Color.FromArgb(255, 105, 105);
+        static readonly string[] MediaExts = { ".mp4", ".mkv", ".mov", ".m4v", ".webm", ".avi", ".ts", ".m2ts", ".mts", ".flv", ".wmv",
+            ".mpg", ".mpeg", ".3gp", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".mka", ".aac" };
 
         public ExportDialog(float scale, string sourcePath, string ext, string summary)
         {
@@ -31,7 +35,6 @@ namespace Chop
             source = sourcePath;
             this.ext = ext;
             folder = Path.GetDirectoryName(sourcePath);
-            defaultName = FreeName(Path.GetFileNameWithoutExtension(sourcePath) + " (cut)");
 
             Text = "Export";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -43,19 +46,23 @@ namespace Chop
             Font = new Font("Segoe UI", 9.5f);
             KeyPreview = true;
             int pad = (int)(16 * f), w = (int)(520 * f), y = pad;
-            ClientSize = new Size(w, (int)(236 * f));
+            ClientSize = new Size(w, (int)(258 * f));
 
             var nameLbl = new Label { Text = "File name", AutoSize = true, ForeColor = Theme.Dim, Location = new Point(pad, y) };
             y += (int)(22 * f);
             extLbl = new Label { Text = ext, AutoSize = true, ForeColor = Theme.Dim };
             nameBox = new TextBox
             {
-                Text = defaultName, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(38, 38, 45), ForeColor = Theme.Text,
-                Font = new Font("Segoe UI", 11f), Location = new Point(pad, y)
+                Text = Path.GetFileNameWithoutExtension(sourcePath), BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(38, 38, 45), ForeColor = Theme.Text, Font = new Font("Segoe UI", 11f), Location = new Point(pad, y)
             };
             nameBox.Width = w - 2 * pad - (int)(52 * f);
+            nameBox.TextChanged += (s, e) => CheckName();
             extLbl.Location = new Point(nameBox.Right + (int)(6 * f), y + (nameBox.Height - extLbl.PreferredHeight) / 2);
-            y += nameBox.Height + (int)(10 * f);
+            y += nameBox.Height + (int)(3 * f);
+
+            errorLbl = new Label { AutoSize = false, ForeColor = ErrorRed, Location = new Point(pad, y), Size = new Size(w - 2 * pad, (int)(20 * f)) };
+            y += errorLbl.Height + (int)(4 * f);
 
             browseBtn = new FlatButton(f, "Change…", null);
             browseBtn.Click += (s, e) => Browse();
@@ -64,12 +71,17 @@ namespace Chop
             browseBtn.Location = new Point(w - pad - browseBtn.Width, y);
             y += browseBtn.Height + (int)(12 * f);
 
+            // Flat style so our light text colour is used (the system style drew it dark grey on dark)
             replaceBox = new CheckBox
             {
                 Text = "Replace the original clip (the original goes to the Recycle Bin)",
-                AutoSize = true, ForeColor = Theme.Text, Location = new Point(pad, y), FlatStyle = FlatStyle.System
+                AutoSize = true, ForeColor = Theme.Text, BackColor = Theme.Bar, Location = new Point(pad, y), FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand
             };
-            replaceBox.CheckedChanged += (s, e) => OnReplaceChanged();
+            replaceBox.FlatAppearance.BorderColor = Color.FromArgb(150, 150, 162);
+            replaceBox.FlatAppearance.CheckedBackColor = Theme.Accent;
+            replaceBox.FlatAppearance.MouseOverBackColor = Color.FromArgb(48, 48, 56);
+            replaceBox.CheckedChanged += (s, e) => { okBtn.Text = replaceBox.Checked ? "Export & replace" : "Export"; PlaceButtons(); CheckName(); nameBox.Focus(); };
             y += replaceBox.PreferredSize.Height + (int)(8 * f);
 
             noteLbl = new Label { Text = summary, AutoSize = false, ForeColor = Theme.Dim, Location = new Point(pad, y), Size = new Size(w - 2 * pad, (int)(20 * f)) };
@@ -78,12 +90,11 @@ namespace Chop
             okBtn.Click += (s, e) => Accept();
             cancelBtn = new FlatButton(f, "Cancel", null);
             cancelBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            int by = ClientSize.Height - pad - okBtn.Height;
-            okBtn.Location = new Point(w - pad - okBtn.Width, by);
-            cancelBtn.Location = new Point(okBtn.Left - (int)(8 * f) - cancelBtn.Width, by);
+            PlaceButtons();
 
-            Controls.AddRange(new Control[] { nameLbl, nameBox, extLbl, folderLbl, browseBtn, replaceBox, noteLbl, okBtn, cancelBtn });
+            Controls.AddRange(new Control[] { nameLbl, nameBox, extLbl, errorLbl, folderLbl, browseBtn, replaceBox, noteLbl, okBtn, cancelBtn });
             UpdateFolder();
+            CheckName();
             Shown += (s, e) => { nameBox.Focus(); nameBox.SelectAll(); };
         }
 
@@ -94,67 +105,70 @@ namespace Chop
             try { DwmSetWindowAttribute(Handle, 20, ref on, 4); } catch { }
         }
 
-        string FreeName(string stem)
+        void PlaceButtons()
         {
-            string n = stem;
-            for (int i = 2; File.Exists(Path.Combine(folder, n + ext)); i++) n = stem + " " + i;
-            return n;
+            int pad = (int)(16 * f), by = ClientSize.Height - pad - okBtn.Height;
+            okBtn.Location = new Point(ClientSize.Width - pad - okBtn.Width, by);
+            cancelBtn.Location = new Point(okBtn.Left - (int)(8 * f) - cancelBtn.Width, by);
         }
 
         void UpdateFolder() { folderLbl.Text = "Save in  " + folder; }
 
-        void OnReplaceChanged()
+        /// <summary>The name as typed, minus a trailing copy of the extension we add anyway.</summary>
+        string TypedName()
         {
-            // replacing usually means "keep the original's name", so offer it; a typed name is left alone
-            string original = Path.GetFileNameWithoutExtension(source);
-            bool sameFolder = string.Equals(folder, Path.GetDirectoryName(source), StringComparison.OrdinalIgnoreCase);
-            if (replaceBox.Checked && nameBox.Text == defaultName && sameFolder
-                && string.Equals(Path.GetExtension(source), ext, StringComparison.OrdinalIgnoreCase))
-                nameBox.Text = original;
-            else if (!replaceBox.Checked && nameBox.Text == original) nameBox.Text = defaultName;
-            okBtn.Text = replaceBox.Checked ? "Export & replace" : "Export";
-            okBtn.Location = new Point(ClientSize.Width - (int)(16 * f) - okBtn.Width, okBtn.Top);
-            cancelBtn.Location = new Point(okBtn.Left - (int)(8 * f) - cancelBtn.Width, okBtn.Top);
-            nameBox.Focus();
-            nameBox.SelectionStart = nameBox.Text.Length;
+            string name = nameBox.Text;
+            if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) name = name.Substring(0, name.Length - ext.Length);
+            return name;
+        }
+
+        static readonly string[] Reserved = { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+
+        /// <summary>Why the typed name can't be used, or null if it can.</summary>
+        string Problem()
+        {
+            string name = TypedName();
+            if (name.Trim().Length == 0) return "";
+            if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return "File names can't contain  \\ / : * ? \" < > |";
+            if (name.EndsWith(" ") || name.EndsWith(".") || name.StartsWith(" ")) return "File names can't start with a space or end with a space or a dot.";
+            if (Array.IndexOf(Reserved, name.Split('.')[0].ToUpperInvariant()) >= 0) return "Windows reserves that name. Try another.";
+            string typedExt = Path.GetExtension(name).ToLowerInvariant();
+            if (typedExt.Length > 0 && Array.IndexOf(MediaExts, typedExt) >= 0)
+                return "This saves as " + ext + ", so leave the extension off.";
+            string target = Path.Combine(folder, name + ext);
+            if (target.Length >= 260) return "That name is too long for this folder.";
+            bool isSource = string.Equals(Path.GetFullPath(target), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase);
+            if (isSource)
+                return replaceBox.Checked ? null : "That's the clip you're editing. Tick \"Replace the original clip\" to save over it.";
+            if (File.Exists(target) || Directory.Exists(target)) return "\"" + name + ext + "\" already exists here. Pick another name.";
+            return null;
+        }
+
+        void CheckName()
+        {
+            string p = Problem();
+            errorLbl.Text = p ?? "";
+            okBtn.Enabled = p == null;
         }
 
         void Browse()
         {
-            using (var d = new SaveFileDialog())
+            using (var d = new FolderBrowserDialog())
             {
-                d.InitialDirectory = folder;
-                d.FileName = nameBox.Text + ext;
-                d.Filter = ext.TrimStart('.').ToUpperInvariant() + "|*" + ext;
-                d.OverwritePrompt = false; // we ask ourselves, and recycle instead of deleting
+                d.SelectedPath = folder;
+                d.Description = "Save the export in…";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
-                folder = Path.GetDirectoryName(d.FileName);
-                nameBox.Text = Path.GetFileNameWithoutExtension(d.FileName);
+                folder = d.SelectedPath;
                 UpdateFolder();
+                CheckName();
             }
         }
 
         void Accept()
         {
-            string name = nameBox.Text.Trim();
-            if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) name = name.Substring(0, name.Length - ext.Length);
-            if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            {
-                MessageBox.Show(this, "That name has characters Windows doesn't allow in file names.", "Export");
-                return;
-            }
-            string target = Path.Combine(folder, name + ext);
-            bool isSource = string.Equals(Path.GetFullPath(target), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase);
-            if (isSource && !replaceBox.Checked)
-            {
-                MessageBox.Show(this, "That's the clip you're editing. Tick \"Replace the original clip\" to overwrite it, or pick another name.", "Export");
-                return;
-            }
-            if (!isSource && File.Exists(target) &&
-                MessageBox.Show(this, Path.GetFileName(target) + " already exists. Replace it? The old file goes to the Recycle Bin.", "Export",
-                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
-                return;
-            OutputPath = target;
+            if (Problem() != null) { System.Media.SystemSounds.Beep.Play(); return; }
+            OutputPath = Path.Combine(folder, TypedName() + ext);
             DialogResult = DialogResult.OK;
             Close();
         }
@@ -165,5 +179,11 @@ namespace Chop
             if (keyData == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); return true; }
             return base.ProcessCmdKey(ref msg, keyData);
         }
+
+        // test hooks
+        public void SetNameForTest(string name) { nameBox.Text = name; }
+        public void SetReplaceForTest(bool on) { replaceBox.Checked = on; }
+        public string ErrorText { get { return errorLbl.Text; } }
+        public bool CanExport { get { return okBtn.Enabled; } }
     }
 }
