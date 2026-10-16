@@ -1,4 +1,4 @@
-# Chop
+# chop - a better windows media player
 
 A small, fast video player for Windows that can also cut videos without re-encoding them.
 
@@ -48,3 +48,7 @@ There's also `ChopCli.exe` for scripted cuts:
 ```
 ChopCli.exe --export in.mp4 out.mp4 exact 1.5-6,10-end
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). The release zip also includes mpv and FFmpeg, which are GPL.

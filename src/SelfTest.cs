@@ -20,6 +20,13 @@ namespace Chop
 
         void TLog(string s) { testLog.WriteLine(s); testLog.Flush(); }
 
+        string MenuPlacement()
+        {
+            if (lastMenu == null) return "(no menu)";
+            var scr = Screen.FromControl(this).Bounds;
+            return lastMenu.Bounds + " screen=" + scr + " onscreen=" + scr.Contains(lastMenu.Bounds);
+        }
+
         Task WaitRestart(int ms = 4000)
         {
             restartTcs = new TaskCompletionSource<bool>();
@@ -132,6 +139,7 @@ namespace Chop
                 FlashOverlay(); await Settle(500);
                 ShowMenu(); await Settle(600);
                 TLog("MENU in fullscreen still open after 600ms: " + (lastMenu != null && lastMenu.Visible) + ", overlay visible: " + overlay.Visible);
+                TLog("MENU bounds " + MenuPlacement());
                 if (lastMenu != null) lastMenu.Close();
                 // the real thing: a click delivered to the "..." button through window messages
                 FlashOverlay(); await Settle(400);
@@ -140,6 +148,7 @@ namespace Chop
                 PostMessage(menuBtn.Handle, 0x0202, IntPtr.Zero, (IntPtr)(5 | 5 << 16));
                 await Settle(700);
                 TLog("MENU via posted click still open: " + (lastMenu != null && lastMenu.Visible));
+                TLog("MENU (click) bounds " + MenuPlacement());
                 if (lastMenu != null) lastMenu.Close();
                 // and if the panel ever gets activated while the menu is open
                 FlashOverlay(); await Settle(400);

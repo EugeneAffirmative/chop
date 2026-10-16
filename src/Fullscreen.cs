@@ -126,15 +126,25 @@ namespace Chop
         }
 
         /// <summary>
-        /// Shows a context menu and keeps the fullscreen panel up while it's open. The menu is always
-        /// owned by the main window: owned by the never-activating panel, Windows closed it instantly.
+        /// Shows a context menu at p (in c's coordinates) and keeps the fullscreen panel up while it's open.
+        /// alignRight puts the menu's right edge at p; above opens it upward. The menu is owned by the main
+        /// window (owned by the never-activating panel, Windows closed it instantly) and placed by hand:
+        /// left to WinForms it landed past the right edge of the screen in fullscreen.
         /// </summary>
-        void ShowMenuOn(ContextMenuStrip m, Control c, Point p)
+        void ShowMenuOn(ContextMenuStrip m, Control c, Point p, bool alignRight = false, bool above = false)
         {
             menuOpen = true;
             lastMenu = m;
             m.Closed += (s, e) => { menuOpen = false; };
-            m.Show(this, PointToClient(c.PointToScreen(p)));
+            var size = m.GetPreferredSize(Size.Empty);
+            var sp = c.PointToScreen(p);
+            var scr = Screen.FromPoint(sp).Bounds; // whole screen: fullscreen covers the taskbar too
+            int x = alignRight ? sp.X - size.Width : sp.X;
+            int y = above || sp.Y + size.Height > scr.Bottom ? sp.Y - size.Height : sp.Y;
+            var at = new Point(Math.Max(scr.Left, Math.Min(x, scr.Right - size.Width)),
+                               Math.Max(scr.Top, Math.Min(y, scr.Bottom - size.Height)));
+            m.Show(this, PointToClient(at));
+            if (m.Location != at) m.Location = at;
         }
 
         ContextMenuStrip lastMenu;

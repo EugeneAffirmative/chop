@@ -625,7 +625,7 @@ namespace Chop
             if (lastOutput != null && File.Exists(lastOutput)) m.Items.Add("Show last export in folder", null, (s, e) => Process.Start("explorer.exe", "/select,\"" + lastOutput + "\""));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Keyboard shortcuts\tF1", null, (s, e) => ShowHelp());
-            ShowMenuOn(m, menuBtn, new Point(0, menuBtn.Height));
+            ShowMenuOn(m, menuBtn, new Point(menuBtn.Width, -(int)(4 * f)), true, true);
         }
 
         void ShowHelp()
