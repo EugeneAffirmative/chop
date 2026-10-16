@@ -95,7 +95,7 @@ namespace Chop
         }
 
         /// <summary>
-        /// Test hook: Chop.exe --export in.mp4 out.mp4 exact|lossless 1.5-6,10-end
+        /// Test hook: Chop.exe --export in.mp4 out.mp4 exact|lossless 1.5-6,10-end [720p]
         /// Times are absolute source seconds; "end" means the end of the file.
         /// </summary>
         static int Cli(string[] args)
@@ -114,7 +114,8 @@ namespace Chop
                     keep.Add(new Range(s, e));
                 }
                 var ex = new Exporter(mi, idx);
-                var res = ex.Export(keep, args[2], args[3] == "lossless" ? ExportMode.Lossless : ExportMode.Exact);
+                int height = args.Length > 5 ? int.Parse(args[5].TrimEnd('p')) : 0;
+                var res = ex.Export(keep, args[2], args[3] == "lossless" ? ExportMode.Lossless : ExportMode.Exact, height);
                 Console.WriteLine(res.Log);
                 if (res.Ok) Tools.NotifyShellCreated(Path.GetFullPath(args[2]));
                 Console.WriteLine((res.Ok ? "OK: " : "FAILED: ") + res.Message);

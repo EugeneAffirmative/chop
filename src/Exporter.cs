@@ -228,8 +228,8 @@ namespace Chop
                 if (b <= a) continue;
 
                 var p = new SegPlan { A = a, B = b, ToEof = toEof };
-                bool lossless = mode == ExportMode.Lossless;
-                if (!lossless && !CanEncode)
+                bool lossless = mode == ExportMode.Lossless && resizeTo == 0; // resizing re-encodes anyway, so cuts are exact
+                if (!lossless && !CanEncode && resizeTo == 0)
                 {
                     // Can't smart-cut this codec; exact only works where cuts already sit on keyframes
                     // (always true for intra-only codecs like ProRes or MJPEG).
@@ -276,6 +276,11 @@ namespace Chop
             foreach (var p in merged)
             {
                 audioOut.Add(new Range(mi.Tick(p.A), p.ToEof ? videoEnd : mi.Tick(p.B)));
+                if (resizeTo > 0)
+                {
+                    pieces.Add(EncodePiece(p.A, p.ToEof ? endTicks : p.B, p.ToEof)); // whole segment, scaled
+                    continue;
+                }
                 if (p.Lossless)
                 {
                     pieces.Add(CopyPiece(p.A, p.B, p.ToEof));
@@ -316,7 +321,7 @@ namespace Chop
         Piece EncodePiece(long a, long b, bool toEof)
         {
             var pc = new Piece { Kind = Kind.Encode, A = a, B = b, ToEof = toEof };
-            pc.Frames = CountFrames(a, b);
+            if (resizeTo == 0) pc.Frames = CountFrames(a, b);
             if (mi.Video.Alpha && IsVpx) pc.DecodeFrom = PrevUsableKey(a);
             pc.Dur = (toEof ? videoEnd : mi.Tick(b)) - mi.Tick(a);
             return pc;
@@ -337,11 +342,62 @@ namespace Chop
             ext = ".mov"; return "mov";
         }
 
+        // ---- resized exports ----
+        int resizeTo; // short side to scale to (720 = 720p), 0 = keep the original size
+
+        static bool? nvenc;
+        /// <summary>Whether this PC has a working NVIDIA hardware encoder (checked once).</summary>
+        static bool HasNvenc
+        {
+            get
+            {
+                if (nvenc == null)
+                {
+                    string err; int code;
+                    Tools.Run(Tools.FFmpeg, new[] { "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=s=256x256:d=0.1", "-c:v", "h264_nvenc", "-f", "null", "-" }, out err, out code);
+                    nvenc = code == 0 && err.Trim().Length == 0;
+                }
+                return nvenc.Value;
+            }
+        }
+
+        /// <summary>What a resized export of this file is encoded as (same family as the source).</summary>
+        public static string ResizeCodecLabel(MediaInfo mi)
+        {
+            if (mi == null || mi.Video == null) return "";
+            switch (mi.Video.Codec)
+            {
+                case "hevc": return "HEVC";
+                case "vp9": return "VP9";
+                case "vp8": return "VP8";
+                default: return "H.264";
+            }
+        }
+
+        /// <summary>
+        /// Bitrate ceiling for a resized export: the source's bitrate scaled by the pixel ratio (plus
+        /// headroom), kept within sensible limits for the size and frame rate. Without it the quality
+        /// target alone made a 720p export bigger than its 1080p source.
+        /// </summary>
+        string ResizeCap()
+        {
+            var v = mi.Video;
+            double ratio = Math.Pow((double)resizeTo / Math.Min(v.Width, v.Height), 2);
+            double table = resizeTo >= 2160 ? 35e6 : resizeTo >= 1440 ? 16e6 : resizeTo >= 1080 ? 8e6 : resizeTo >= 720 ? 5e6 : resizeTo >= 480 ? 2.5e6 : 1.5e6;
+            if (1 / idx.TypicalFrameDur() > 40) table *= 1.5;
+            if (v.Codec == "hevc" || v.Codec == "vp9") table *= 0.7;
+            double src = v.BitRate > 0 ? v.BitRate : mi.BitRate * 0.9;
+            double cap = src > 0 ? src * ratio * 1.3 : table;
+            cap = Math.Max(table * 0.3, Math.Min(cap, table * 1.5));
+            return ((long)(cap / 1000)).ToString() + "k";
+        }
+
         List<string> EncodeArgs(Piece pc, string container, string outFile)
         {
             var v = mi.Video;
             double fps = 1 / idx.TypicalFrameDur();
             double eps = Math.Min(0.001, 0.25 / fps);
+            bool resize = resizeTo > 0;
             var a = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-noautorotate" };
             bool alpha = v.Alpha && IsVpx && pc.DecodeFrom != long.MinValue;
             if (!alpha) a.AddRange(new[] { "-ss", Tools.F(Math.Max(0, mi.Tick(pc.A) - mi.StartTime - eps)) });
@@ -354,37 +410,61 @@ namespace Chop
             }
             a.AddRange(new[] { "-i", mi.Path });
             if (alpha && pc.A > pc.DecodeFrom) a.AddRange(new[] { "-ss", Tools.F(mi.Tick(pc.A) - mi.Tick(pc.DecodeFrom) - 2 * eps) });
-            a.AddRange(new[] { "-map", "0:" + v.Index, "-an", "-sn", "-dn", "-frames:v", pc.Frames.ToString(),
-                "-fps_mode", "passthrough", "-enc_time_base", "demux" });
+            a.AddRange(new[] { "-map", "0:" + v.Index, "-an", "-sn", "-dn" });
+            // short heads count frames exactly; whole resized segments stop by time instead (no need to
+            // read every packet of a long segment just to count it)
+            if (!resize) a.AddRange(new[] { "-frames:v", pc.Frames.ToString() });
+            else if (!pc.ToEof) a.AddRange(new[] { "-t", Tools.F(mi.Tick(pc.B) - mi.Tick(pc.A) - eps) });
+            a.AddRange(new[] { "-fps_mode", "passthrough", "-enc_time_base", "demux" });
+            if (resize)
+            {
+                // scale so the short side matches (works for portrait phone video too)
+                string t = resizeTo.ToString();
+                a.AddRange(new[] { "-vf", "scale=w='if(gt(iw,ih),-2," + t + ")':h='if(gt(iw,ih)," + t + ",-2)':flags=lanczos" });
+            }
             string pix = v.PixFmt ?? "yuv420p";
             string range = v.ColorRange;
-            if (pix.StartsWith("yuvj")) { pix = "yuv" + pix.Substring(4); range = "pc"; }
+            if (pix.StartsWith("yuvj")) { pix = "yuv" + pix.Substring(4); range = resize ? "tv" : "pc"; }
             bool tenBit = pix.Contains("10");
+            if (resize && !IsVpx) pix = tenBit && v.Codec == "hevc" ? "yuv420p10le" : "yuv420p";
             if (v.Codec == "hevc")
             {
-                a.AddRange(new[] { "-c:v", "libx265", "-preset", "fast", "-crf", "14", "-pix_fmt", pix });
-                if (tenBit) a.AddRange(new[] { "-profile:v", "main10" });
-                var xp = "log-level=error:repeat-headers=1";
-                if (mi.MasterDisplay != null) xp += ":hdr10=1:master-display=" + mi.MasterDisplay;
-                if (mi.MaxCll != null) xp += ":max-cll=" + mi.MaxCll;
-                a.AddRange(new[] { "-x265-params", xp });
+                if (resize && HasNvenc)
+                {
+                    a.AddRange(new[] { "-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", "25", "-b:v", "0",
+                        "-pix_fmt", tenBit ? "p010le" : "yuv420p", "-profile:v", tenBit ? "main10" : "main" });
+                }
+                else
+                {
+                    a.AddRange(new[] { "-c:v", "libx265", "-preset", "fast", "-crf", resize ? "22" : "14", "-pix_fmt", pix });
+                    if (tenBit) a.AddRange(new[] { "-profile:v", "main10" });
+                    var xp = "log-level=error:repeat-headers=1";
+                    if (mi.MasterDisplay != null) xp += ":hdr10=1:master-display=" + mi.MasterDisplay;
+                    if (mi.MaxCll != null) xp += ":max-cll=" + mi.MaxCll;
+                    a.AddRange(new[] { "-x265-params", xp });
+                }
             }
             else if (v.Codec == "vp9")
             {
                 if (v.Alpha) pix = tenBit ? "yuva420p10le" : "yuva420p";
-                a.AddRange(new[] { "-c:v", "libvpx-vp9", "-crf", "15", "-b:v", "0", "-deadline", "good", "-cpu-used", "2", "-row-mt", "1", "-pix_fmt", pix });
+                a.AddRange(new[] { "-c:v", "libvpx-vp9", "-crf", resize ? "31" : "15", "-b:v", resize ? ResizeCap() : "0", "-deadline", "good", "-cpu-used", resize ? "4" : "2",
+                    "-row-mt", "1", "-pix_fmt", pix });
                 if (v.Alpha) a.AddRange(new[] { "-auto-alt-ref", "0" });
             }
             else if (v.Codec == "vp8")
             {
                 if (v.Alpha) pix = "yuva420p";
-                a.AddRange(new[] { "-c:v", "libvpx", "-crf", "6", "-b:v", "60M", "-qmin", "0", "-qmax", "24", "-deadline", "good", "-cpu-used", "1", "-pix_fmt", pix });
+                a.AddRange(new[] { "-c:v", "libvpx", "-crf", resize ? "10" : "6", "-b:v", resize ? ResizeCap() : "60M", "-qmin", "0", "-qmax", resize ? "40" : "24",
+                    "-deadline", "good", "-cpu-used", resize ? "3" : "1", "-pix_fmt", pix });
                 if (v.Alpha) a.AddRange(new[] { "-auto-alt-ref", "0" });
             }
+            else if (resize && HasNvenc)
+                a.AddRange(new[] { "-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", "23", "-b:v", "0", "-profile:v", "high", "-pix_fmt", "yuv420p" });
+            else if (resize)
+                a.AddRange(new[] { "-c:v", "libx264", "-preset", "faster", "-crf", "21", "-pix_fmt", "yuv420p" });
             else
-            {
                 a.AddRange(new[] { "-c:v", "libx264", "-preset", "medium", "-crf", "12", "-pix_fmt", pix });
-            }
+            if (resize && !IsVpx) { string cap = ResizeCap(); a.AddRange(new[] { "-maxrate", cap, "-bufsize", ((long)(double.Parse(cap.TrimEnd('k')) * 2)) + "k" }); }
             if (!string.IsNullOrEmpty(range) && range != "unknown") a.AddRange(new[] { "-color_range", range });
             if (!string.IsNullOrEmpty(v.ColorSpace) && v.ColorSpace != "unknown") a.AddRange(new[] { "-colorspace", v.ColorSpace });
             if (!string.IsNullOrEmpty(v.ColorPrimaries) && v.ColorPrimaries != "unknown") a.AddRange(new[] { "-color_primaries", v.ColorPrimaries });
@@ -507,8 +587,9 @@ namespace Chop
 
         static string Tail(string s, int n) { s = s.Trim(); return s.Length <= n ? s : "…" + s.Substring(s.Length - n); }
 
-        public ExportResult Export(List<Range> keep, string outPath, ExportMode mode)
+        public ExportResult Export(List<Range> keep, string outPath, ExportMode mode, int targetHeight = 0)
         {
+            resizeTo = mi.Video != null && targetHeight > 0 && targetHeight < Math.Min(mi.Video.Width, mi.Video.Height) ? targetHeight : 0;
             var res = new ExportResult { OutputPath = outPath };
             var sw = Stopwatch.StartNew();
             string tmp = null;
@@ -575,7 +656,7 @@ namespace Chop
                 bool onePass = mi.Video != null && mi.Video.Index == 0 && (
                     (mi.Video.Codec == "h264" && (mi.IsMatroska || mi.IsMpegTs || (mi.IsMp4Family && mi.Video.TbNum == 1)))
                     || (IsVpx && mi.IsMatroska));
-                bool twoStage = anyEncode && !onePass;
+                bool twoStage = anyEncode && (!onePass || resizeTo > 0);
                 int encCount = pieces == null ? 0 : pieces.Count(p => p.Kind == Kind.Encode);
                 Log(string.Format("plan: {0} pieces, {1} re-encoded, twoStage={2}, outDur={3:0.###}", pieces == null ? 0 : pieces.Count, encCount, twoStage, outDur));
                 if (pieces != null)
@@ -598,7 +679,7 @@ namespace Chop
                         if (pc.Kind != Kind.Encode) continue;
                         pc.File = Path.Combine(tmp, "enc" + (n++) + ext);
                         double w = pc.Dur * 20;
-                        if (!RunFfmpeg(EncodeArgs(pc, container, pc.File), pc.Dur, done / total, (done + w) / total, "Re-encoding cut " + n + " of " + encCount + "…")) return Cancelled(res);
+                        if (!RunFfmpeg(EncodeArgs(pc, container, pc.File), pc.Dur, done / total, (done + w) / total, (resizeTo > 0 ? "Re-encoding to " + resizeTo + "p, part " : "Re-encoding cut ") + n + " of " + encCount + "…")) return Cancelled(res);
                         done += w;
                     }
 
@@ -675,7 +756,7 @@ namespace Chop
                 if (aIn >= 0)
                     for (int a = 0; a < mi.Audio.Count; a++) final.AddRange(new[] { "-/bsf:a:" + a, Path.Combine(tmp, "absf" + a + ".txt") });
                 if (mi.Video != null && mi.Video.Codec == "hevc" && mp4Out)
-                    final.AddRange(new[] { "-tag:v", twoStage && anyEncode ? "hev1" : "hvc1" });
+                    final.AddRange(new[] { "-tag:v", twoStage && anyEncode && resizeTo == 0 ? "hev1" : "hvc1" });
                 if (mp4Out)
                 {
                     double estBytes = mi.BitRate > 0 ? mi.BitRate / 8 * outDur : 0;
@@ -689,9 +770,9 @@ namespace Chop
                 File.Move(partial, outPath);
                 res.Ok = true;
                 res.Seconds = sw.Elapsed.TotalSeconds;
-                string how = encCount == 0 ? "lossless copy" : encCount + " short piece" + (encCount == 1 ? "" : "s") + " re-encoded at the cuts, the rest copied";
+                string how = resizeTo > 0 ? "re-encoded to " + resizeTo + "p" : encCount == 0 ? "lossless copy" : encCount + " short piece" + (encCount == 1 ? "" : "s") + " re-encoded at the cuts, the rest copied";
                 res.Message = "Saved " + Path.GetFileName(outPath) + " (" + Fmt.Time(outDur) + ", " + how + ") in " + res.Seconds.ToString("0.0", Tools.Inv) + "s.";
-                if (twoStage && anyEncode && mi.Video.Codec == "hevc" && mp4Out)
+                if (twoStage && anyEncode && resizeTo == 0 && mi.Video.Codec == "hevc" && mp4Out)
                     res.Notes.Add("HEVC smart cuts are tagged hev1 so mixed encoder headers stay valid; Windows, Android and browsers play it, older Apple players may not. Use Lossless mode for an hvc1 file.");
                 Report(1, res.Message);
             }

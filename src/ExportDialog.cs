@@ -25,11 +25,23 @@ namespace Chop
         readonly Label extLbl, errorLbl, folderLbl, noteLbl;
         readonly CheckBox replaceBox;
         readonly FlatButton okBtn, cancelBtn, browseBtn;
+        readonly ComboBox resBox;
+        readonly System.Collections.Generic.List<int> heights = new System.Collections.Generic.List<int>();
+        readonly string length, modeText, codecLabel;
+
+        /// <summary>Short side to scale to (720 = 720p), or 0 for the original size.</summary>
+        public int TargetHeight { get { return resBox.SelectedIndex > 0 ? heights[resBox.SelectedIndex - 1] : 0; } }
+
+        void UpdateNote()
+        {
+            int h = TargetHeight;
+            noteLbl.Text = length + "  ·  " + (h == 0 ? modeText : "re-encoded to " + h + "p (" + codecLabel + "), so it takes longer");
+        }
         static readonly Color ErrorRed = Color.FromArgb(255, 105, 105);
         static readonly string[] MediaExts = { ".mp4", ".mkv", ".mov", ".m4v", ".webm", ".avi", ".ts", ".m2ts", ".mts", ".flv", ".wmv",
             ".mpg", ".mpeg", ".3gp", ".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".mka", ".aac" };
 
-        public ExportDialog(float scale, string sourcePath, string ext, string summary)
+        public ExportDialog(float scale, string sourcePath, string ext, string length, string modeText, int shortSide, string codecLabel)
         {
             f = scale;
             source = sourcePath;
@@ -46,7 +58,8 @@ namespace Chop
             Font = new Font("Segoe UI", 9.5f);
             KeyPreview = true;
             int pad = (int)(16 * f), w = (int)(520 * f), y = pad;
-            ClientSize = new Size(w, (int)(258 * f));
+            ClientSize = new Size(w, (int)((shortSide > 0 ? 298 : 258) * f));
+            this.length = length; this.modeText = modeText; this.codecLabel = codecLabel;
 
             var nameLbl = new Label { Text = "File name", AutoSize = true, ForeColor = Theme.Dim, Location = new Point(pad, y) };
             y += (int)(22 * f);
@@ -71,6 +84,23 @@ namespace Chop
             browseBtn.Location = new Point(w - pad - browseBtn.Width, y);
             y += browseBtn.Height + (int)(12 * f);
 
+            // Resolution: Original keeps the stream-copy export; a smaller size re-encodes the kept parts
+            var resLbl = new Label { Text = "Resolution", AutoSize = true, ForeColor = Theme.Dim };
+            resBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(38, 38, 45),
+                ForeColor = Theme.Text, Width = (int)(230 * f), Location = new Point(pad + (int)(86 * f), y)
+            };
+            resBox.Items.Add("Original (no re-encode)");
+            foreach (int h in new[] { 2160, 1440, 1080, 720, 480, 360 })
+                if (shortSide > h + 8) { resBox.Items.Add(h + "p"); heights.Add(h); }
+            resBox.SelectedIndex = 0;
+            resBox.SelectedIndexChanged += (s, e) => UpdateNote();
+            resLbl.Location = new Point(pad, y + (resBox.Height - resLbl.PreferredHeight) / 2);
+            bool hasVideo = shortSide > 0;
+            resLbl.Visible = resBox.Visible = hasVideo;
+            if (hasVideo) y += resBox.Height + (int)(12 * f);
+
             // Flat style so our light text colour is used (the system style drew it dark grey on dark)
             replaceBox = new CheckBox
             {
@@ -84,7 +114,7 @@ namespace Chop
             replaceBox.CheckedChanged += (s, e) => { okBtn.Text = replaceBox.Checked ? "Export & replace" : "Export"; PlaceButtons(); CheckName(); nameBox.Focus(); };
             y += replaceBox.PreferredSize.Height + (int)(8 * f);
 
-            noteLbl = new Label { Text = summary, AutoSize = false, ForeColor = Theme.Dim, Location = new Point(pad, y), Size = new Size(w - 2 * pad, (int)(20 * f)) };
+            noteLbl = new Label { AutoSize = false, ForeColor = Theme.Dim, Location = new Point(pad, y), Size = new Size(w - 2 * pad, (int)(20 * f)) };
 
             okBtn = new FlatButton(f, "Export", "") { Accent = true };
             okBtn.Click += (s, e) => Accept();
@@ -92,7 +122,8 @@ namespace Chop
             cancelBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             PlaceButtons();
 
-            Controls.AddRange(new Control[] { nameLbl, nameBox, extLbl, errorLbl, folderLbl, browseBtn, replaceBox, noteLbl, okBtn, cancelBtn });
+            Controls.AddRange(new Control[] { nameLbl, nameBox, extLbl, errorLbl, folderLbl, browseBtn, resLbl, resBox, replaceBox, noteLbl, okBtn, cancelBtn });
+            UpdateNote();
             UpdateFolder();
             CheckName();
             Shown += (s, e) => { nameBox.Focus(); nameBox.SelectAll(); };
@@ -185,5 +216,7 @@ namespace Chop
         public void SetReplaceForTest(bool on) { replaceBox.Checked = on; }
         public string ErrorText { get { return errorLbl.Text; } }
         public bool CanExport { get { return okBtn.Enabled; } }
+        public void SetResolutionForTest(int i) { resBox.SelectedIndex = i; }
+        public int ResolutionCount { get { return resBox.Items.Count; } }
     }
 }

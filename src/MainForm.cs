@@ -652,11 +652,12 @@ namespace Chop
         {
             if (!ready || exporting || model.Segs.Count == 0) return;
             string ext = Exporter.DefaultExtension(mi);
-            string summary = Fmt.Time(model.Duration) + " long  ·  " + (mode == ExportMode.Exact ? "exact cuts" : "lossless (cuts snap to keyframes)") + "  ·  Tab switches in the editor";
-            using (var d = new ExportDialog(f, path, ext, summary))
+            string modeText = (mode == ExportMode.Exact ? "exact cuts" : "lossless (cuts snap to keyframes)") + "  ·  Tab switches in the editor";
+            int shortSide = mi.Video != null ? Math.Min(mi.Video.Width, mi.Video.Height) : 0;
+            using (var d = new ExportDialog(f, path, ext, Fmt.Time(model.Duration) + " long", modeText, shortSide, Exporter.ResizeCodecLabel(mi)))
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
-                StartExport(d.OutputPath, d.ReplaceOriginal);
+                StartExport(d.OutputPath, d.ReplaceOriginal, d.TargetHeight);
             }
         }
 
@@ -664,7 +665,7 @@ namespace Chop
         /// Exports under a temporary name beside the target. Nothing existing is touched until the export
         /// has fully succeeded; then whatever it replaces goes to the Recycle Bin and the new file moves in.
         /// </summary>
-        void StartExport(string target, bool replaceOriginal)
+        void StartExport(string target, bool replaceOriginal, int targetHeight = 0)
         {
             if (!ready || exporting || model.Segs.Count == 0) return;
             string temp = Path.Combine(Path.GetDirectoryName(target),
@@ -686,7 +687,7 @@ namespace Chop
             });
             var th = new Thread(() =>
             {
-                var res = ex.Export(keep, temp, m);
+                var res = ex.Export(keep, temp, m, targetHeight);
                 Ui(() => ExportDone(res, target, replaceOriginal));
             }) { IsBackground = true, Name = "export" };
             th.Start();

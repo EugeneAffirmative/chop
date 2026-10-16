@@ -4,7 +4,7 @@ A small, fast video player for Windows that can also cut videos without re-encod
 
 Open a video, press C to cut at the playhead, Delete to drop the piece you're on, and Ctrl+E to save. Gaps close up on their own and playback skips whatever you removed, so what you see is what you get.
 
-Exports keep the original video and audio streams, so frame rate, bitrate and quality stay the same. In Exact mode only the few frames between a cut and the next keyframe get re-encoded, at very high quality. Lossless mode doesn't re-encode anything, but cuts snap to keyframes. When you export you can rename the file or replace the original (the old one goes to the Recycle Bin).
+Exports keep the original video and audio streams, so frame rate, bitrate and quality stay the same. In Exact mode only the few frames between a cut and the next keyframe get re-encoded, at very high quality. Lossless mode doesn't re-encode anything, but cuts snap to keyframes. When you export you can rename the file, replace the original (the old one goes to the Recycle Bin), or pick a smaller resolution like 720p or 480p. Smaller sizes are re-encoded, on the GPU if you have an NVIDIA card.
 
 Playback is [mpv](https://mpv.io), cutting is [ffmpeg](https://ffmpeg.org). Handles mp4, mkv, mov, webm, ts and most audio files, including HDR and rotated phone video. Exact cuts work for H.264, HEVC, VP9 and VP8, and transparent WebM keeps its transparency.
 

@@ -68,7 +68,7 @@ namespace Chop
                 TLog("ready segs=" + SegsText() + " frameDur=" + model.FrameDur.ToString(Tools.Inv));
                 string taken = Path.Combine(Path.GetDirectoryName(path), "taken.mp4");
                 File.WriteAllText(taken, "");
-                using (var d = new ExportDialog(f, path, ".mp4", "0:10.000 long  ·  exact cuts  ·  Tab switches in the editor"))
+                using (var d = new ExportDialog(f, path, Path.GetExtension(path), "0:40.000 long", "exact cuts  ·  Tab switches in the editor", mi.Video != null ? Math.Min(mi.Video.Width, mi.Video.Height) : 0, Exporter.ResizeCodecLabel(mi)))
                 {
                     d.StartPosition = FormStartPosition.Manual; d.Location = new Point(-4000, -4000);
                     d.Show(this); await Settle(200);
@@ -84,6 +84,8 @@ namespace Chop
                     d.SetNameForTest("my new clip"); log("'my new clip'"); shot("dlg_5_ok");
                     d.SetNameForTest("   "); log("blank");
                     d.SetNameForTest("CON"); log("'CON'");
+                    d.SetNameForTest("my new clip"); d.SetResolutionForTest(d.ResolutionCount - 1); await Settle(50); shot("dlg_6_resolution");
+                    TLog("RES options=" + d.ResolutionCount + " picked=" + d.TargetHeight);
                     d.Close();
                 }
                 File.Delete(taken);
@@ -110,6 +112,7 @@ namespace Chop
                 await SeekT(6.0 * k); Split();
                 TLog("after splits " + SegsText());
                 await SeekT(4.0 * k);
+                TLog("before delete: ready=" + ready + " exporting=" + exporting + " trimming=" + trimming + " marks=" + tl.MarkIn + "/" + tl.MarkOut + " play=" + play + " segAt=" + model.SegAt(play));
                 var w = WaitRestart(6000);
                 Delete();
                 await w; await Settle();
