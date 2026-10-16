@@ -137,7 +137,10 @@ namespace Chop
             lastMenu = m;
             m.Closed += (s, e) => { menuOpen = false; };
             var size = m.GetPreferredSize(Size.Empty);
-            var sp = c.PointToScreen(p);
+            var host = c.FindForm();
+            Point sp;
+            if (host != null && host.Visible) sp = c.PointToScreen(p);
+            else { sp = new Point(Bounds.Right - (int)(8 * f), Bounds.Bottom - (int)(8 * f)); alignRight = above = true; } // anchor not on screen
             var scr = Screen.FromPoint(sp).Bounds; // whole screen: fullscreen covers the taskbar too
             int x = alignRight ? sp.X - size.Width : sp.X;
             int y = above || sp.Y + size.Height > scr.Bottom ? sp.Y - size.Height : sp.Y;
