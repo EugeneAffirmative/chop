@@ -43,6 +43,7 @@ namespace Chop
             public bool ToEof;
             public long OutDts;      // copy: dts of the first excluded packet
             public int Frames;       // encode: number of frames
+            public long DecodeFrom = long.MinValue; // encode, transparent VP8/VP9: where decoding must start
             public double Dur;       // seconds
             public string File;
         }
@@ -124,6 +125,60 @@ namespace Chop
             return -1;
         }
 
+        // ---- transparent VP8/VP9 ----
+        // WebM transparency is a second, hidden VP8/VP9 stream whose keyframes needn't line up with the
+        // picture's. A cut can only start at a keyframe where both decode, so candidates are checked by
+        // actually decoding a few frames there with libvpx (cheap, and cached).
+        readonly Dictionary<long, bool> alphaOk = new Dictionary<long, bool>();
+        long firstPts = long.MinValue;
+
+        bool AlphaKeyAt(long pts)
+        {
+            if (!mi.Video.Alpha || pts <= firstPts) return true;
+            bool ok;
+            if (alphaOk.TryGetValue(pts, out ok)) return ok;
+            string err; int code;
+            Tools.Run(Tools.FFmpeg, new[] { "-v", "error", "-nostdin", "-noaccurate_seek", "-ss", Tools.F(mi.Tick(pts) - mi.StartTime + SeekEps),
+                "-c:v", mi.Video.Codec == "vp9" ? "libvpx-vp9" : "libvpx", "-i", mi.Path, "-map", "0:" + mi.Video.Index,
+                "-frames:v", "3", "-f", "null", "-" }, out err, out code);
+            ok = code == 0 && err.Trim().Length == 0;
+            alphaOk[pts] = ok;
+            return ok;
+        }
+
+        double SeekEps { get { return Math.Min(0.001, 0.25 * idx.TypicalFrameDur()); } }
+
+        /// <summary>First keyframe at or after pts (before limit) where a copy can start, or -1.</summary>
+        long NextUsableKey(long pts, long limit)
+        {
+            int tests = 0;
+            for (double t0 = mi.Tick(pts), span = 8; t0 < mi.Tick(limit) && tests < 40; t0 += span, span *= 2)
+                foreach (var f in idx.Window(t0, t0 + span))
+                {
+                    if (f.Pts < pts || f.Pts >= limit || !f.Key) continue;
+                    if (mi.Video.Alpha && tests++ >= 40) return -1;
+                    if (AlphaKeyAt(f.Pts)) return f.Pts;
+                }
+            return -1;
+        }
+
+        /// <summary>Last keyframe at or before pts where decoding (or a copy) can start; the file start at worst.</summary>
+        long PrevUsableKey(long pts)
+        {
+            int tests = 0;
+            for (double t1 = mi.Tick(pts), span = 8; ; t1 -= span, span *= 2)
+            {
+                var w = idx.Window(t1 - span, t1);
+                for (int i = w.Count - 1; i >= 0; i--)
+                {
+                    if (w[i].Pts > pts || !w[i].Key) continue;
+                    if (tests++ >= 40) return firstPts;
+                    if (AlphaKeyAt(w[i].Pts)) return w[i].Pts;
+                }
+                if (t1 - span <= mi.StartTime) return firstPts;
+            }
+        }
+
         int CountFrames(long a, long b)
         {
             var w = idx.Window(mi.Tick(a) - 0.001, mi.Tick(b) + 0.001);
@@ -139,7 +194,7 @@ namespace Chop
             throw new Exception("Frame lookup failed at " + mi.Tick(t));
         }
 
-        bool CanEncode { get { return mi.Video.Codec == "h264" || mi.Video.Codec == "hevc"; } }
+        bool CanEncode { get { var c = mi.Video.Codec; return c == "h264" || c == "hevc" || c == "vp9" || c == "vp8"; } }
 
         List<Piece> PlanVideo(List<Range> segs, ExportMode mode, List<Range> audioOut, List<string> notes)
         {
@@ -147,6 +202,8 @@ namespace Chop
             tol = Math.Max(1, mi.ToTicks(0.25 / fps));
             videoEnd = idx.VideoEnd();
             endTicks = mi.ToTicks(videoEnd);
+            var fw = idx.Window(mi.StartTime - 1, mi.StartTime + 5);
+            firstPts = fw.Count > 0 ? fw[0].Pts : mi.ToTicks(mi.StartTime);
 
             // 1. snap each kept range to real frames (exact) or keyframes (lossless)
             var plans = new List<SegPlan>();
@@ -182,8 +239,8 @@ namespace Chop
                 }
                 if (lossless)
                 {
-                    int k = PrevKey(ws, a);
-                    if (k >= 0) p.A = ws[k].Pts;
+                    long ka = PrevUsableKey(a);
+                    if (ka != long.MinValue) p.A = ka;
                     if (!toEof)
                     {
                         int k2 = NextKey(we, b);
@@ -224,9 +281,9 @@ namespace Chop
                     pieces.Add(CopyPiece(p.A, p.B, p.ToEof));
                     continue;
                 }
-                var ws = Around(mi.Tick(p.A));
-                int k1i = NextKey(ws, p.A);
-                long k1 = k1i >= 0 ? ws[k1i].Pts : long.MaxValue;
+                long k1n = NextUsableKey(p.A, p.ToEof ? endTicks : p.B);
+
+                long k1 = k1n >= 0 ? k1n : long.MaxValue;
                 if (k1 >= (p.ToEof ? endTicks : p.B))
                 {
                     pieces.Add(EncodePiece(p.A, p.ToEof ? endTicks : p.B, p.ToEof));
@@ -260,6 +317,7 @@ namespace Chop
         {
             var pc = new Piece { Kind = Kind.Encode, A = a, B = b, ToEof = toEof };
             pc.Frames = CountFrames(a, b);
+            if (mi.Video.Alpha && IsVpx) pc.DecodeFrom = PrevUsableKey(a);
             pc.Dur = (toEof ? videoEnd : mi.Tick(b)) - mi.Tick(a);
             return pc;
         }
@@ -268,8 +326,11 @@ namespace Chop
 
         static string ConcatPath(string p) { return "'" + p.Replace('\\', '/').Replace("'", "'\\''") + "'"; }
 
+        bool IsVpx { get { return mi.Video.Codec == "vp9" || mi.Video.Codec == "vp8"; } }
+
         string EncodeContainer(bool twoStage, out string ext)
         {
+            if (IsVpx) { bool webm = Path.GetExtension(mi.Path).ToLowerInvariant() == ".webm"; ext = webm ? ".webm" : ".mkv"; return webm ? "webm" : "matroska"; }
             if (twoStage || mi.IsMpegTs) { ext = ".ts"; return "mpegts"; }
             if (mi.IsMatroska) { ext = ".mkv"; return "matroska"; }
             if (mi.FormatName.Contains("mp4") && Path.GetExtension(mi.Path).ToLowerInvariant() != ".mov") { ext = ".mp4"; return "mp4"; }
@@ -281,10 +342,20 @@ namespace Chop
             var v = mi.Video;
             double fps = 1 / idx.TypicalFrameDur();
             double eps = Math.Min(0.001, 0.25 / fps);
-            var a = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-noautorotate",
-                "-ss", Tools.F(Math.Max(0, mi.Tick(pc.A) - mi.StartTime - eps)), "-i", mi.Path,
-                "-map", "0:" + v.Index, "-an", "-sn", "-dn", "-frames:v", pc.Frames.ToString(),
-                "-fps_mode", "passthrough", "-enc_time_base", "demux" };
+            var a = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-noautorotate" };
+            bool alpha = v.Alpha && IsVpx && pc.DecodeFrom != long.MinValue;
+            if (!alpha) a.AddRange(new[] { "-ss", Tools.F(Math.Max(0, mi.Tick(pc.A) - mi.StartTime - eps)) });
+            else
+            {
+                // decode from a keyframe where the transparency stream also starts cleanly, then skip ahead;
+                // ffmpeg's own VP8/VP9 decoders drop the transparency layer, libvpx keeps it
+                a.AddRange(new[] { "-noaccurate_seek", "-ss", Tools.F(mi.Tick(pc.DecodeFrom) - mi.StartTime + eps),
+                    "-c:v", v.Codec == "vp9" ? "libvpx-vp9" : "libvpx" });
+            }
+            a.AddRange(new[] { "-i", mi.Path });
+            if (alpha && pc.A > pc.DecodeFrom) a.AddRange(new[] { "-ss", Tools.F(mi.Tick(pc.A) - mi.Tick(pc.DecodeFrom) - 2 * eps) });
+            a.AddRange(new[] { "-map", "0:" + v.Index, "-an", "-sn", "-dn", "-frames:v", pc.Frames.ToString(),
+                "-fps_mode", "passthrough", "-enc_time_base", "demux" });
             string pix = v.PixFmt ?? "yuv420p";
             string range = v.ColorRange;
             if (pix.StartsWith("yuvj")) { pix = "yuv" + pix.Substring(4); range = "pc"; }
@@ -297,6 +368,18 @@ namespace Chop
                 if (mi.MasterDisplay != null) xp += ":hdr10=1:master-display=" + mi.MasterDisplay;
                 if (mi.MaxCll != null) xp += ":max-cll=" + mi.MaxCll;
                 a.AddRange(new[] { "-x265-params", xp });
+            }
+            else if (v.Codec == "vp9")
+            {
+                if (v.Alpha) pix = tenBit ? "yuva420p10le" : "yuva420p";
+                a.AddRange(new[] { "-c:v", "libvpx-vp9", "-crf", "15", "-b:v", "0", "-deadline", "good", "-cpu-used", "2", "-row-mt", "1", "-pix_fmt", pix });
+                if (v.Alpha) a.AddRange(new[] { "-auto-alt-ref", "0" });
+            }
+            else if (v.Codec == "vp8")
+            {
+                if (v.Alpha) pix = "yuva420p";
+                a.AddRange(new[] { "-c:v", "libvpx", "-crf", "6", "-b:v", "60M", "-qmin", "0", "-qmax", "24", "-deadline", "good", "-cpu-used", "1", "-pix_fmt", pix });
+                if (v.Alpha) a.AddRange(new[] { "-auto-alt-ref", "0" });
             }
             else
             {
@@ -364,13 +447,22 @@ namespace Chop
             // audio kept so far ends when played back to back; packets whose middle falls before it are
             // dropped. Pieces cut from one continuous stretch rejoin seamlessly, real cuts land within
             // half an audio frame (~10 ms), and the error never accumulates over many cuts.
+            // Within a slot the running end is measured from timestamps (start of the slot's audio plus
+            // pts offset), not by adding up packet durations: WebM rounds those to whole milliseconds,
+            // which drifted ~30 ms per segment with Vorbis. ld(2) = slot index + 1, ld(3)/ld(4) = where
+            // the slot's first kept packet sits back to back / in pts.
             int n = slots.Count;
             string d = packetDur > 0 ? Tools.F(packetDur) : "duration*tb";
             string drop = Tree("pts*tb", th, 0, n - 1, k =>
             {
-                string s = Tools.F(Gap * k), end = Tools.F(slots[k].G + slots[k].Dur);
-                return "if(gte(pts*tb+" + d + "/2," + end + "),1,if(lt(pts*tb-" + s + "+" + d + "/2,ld(0)),1,"
-                    + "st(0,if(ld(1),ld(0),pts*tb-" + s + ")+" + d + ")*0+st(1,1)*0))";
+                string s = Tools.F(Gap * k), end = Tools.F(slots[k].G + slots[k].Dur), slot = (k + 1).ToString();
+                string p = "(pts*tb-" + s + ")";
+                // inside a slot every packet is kept (they're consecutive in the source); only the slot's
+                // first packet is chosen against the running end
+                string keepSame = "st(0,ld(3)+" + p + "-ld(4)+" + d + ")*0";
+                string startSlot = "st(0,st(3,if(ld(1),ld(0)," + p + "))+st(4," + p + ")*0+st(2," + slot + ")*0+" + d + ")*0+st(1,1)*0";
+                return "if(gte(pts*tb+" + d + "/2," + end + "),1,if(eq(ld(2)," + slot + ")," + keepSame + ","
+                    + "if(lt(" + p + "+" + d + "/2,ld(0)),1," + startSlot + ")))";
             });
             string shift = Tree("PTS*TB", th, 0, n - 1, k => Tools.F(Gap * k));
             return "noise=drop=" + Esc(drop) + ",setts=pts=" + Esc("PTS-(" + shift + ")/TB") + ":dts=" + Esc("DTS-(" + shift + ")/TB");
@@ -477,8 +569,13 @@ namespace Chop
                 res.OutDuration = outDur;
 
                 bool anyEncode = pieces != null && pieces.Any(p => p.Kind == Kind.Encode);
-                bool twoStage = anyEncode && !(mi.Video.Codec == "h264" && mi.Video.Index == 0
-                    && (mi.IsMatroska || mi.IsMpegTs || (mi.IsMp4Family && mi.Video.TbNum == 1)));
+                // One pass works when re-encoded pieces can sit next to copied ones in the source's own
+                // container: H.264 (the concat demuxer moves its headers in-band) and VP8/VP9 in WebM/MKV
+                // (no stream headers at all). Otherwise pieces go through MPEG-TS (or MKV for VP8/VP9) first.
+                bool onePass = mi.Video != null && mi.Video.Index == 0 && (
+                    (mi.Video.Codec == "h264" && (mi.IsMatroska || mi.IsMpegTs || (mi.IsMp4Family && mi.Video.TbNum == 1)))
+                    || (IsVpx && mi.IsMatroska));
+                bool twoStage = anyEncode && !onePass;
                 int encCount = pieces == null ? 0 : pieces.Count(p => p.Kind == Kind.Encode);
                 Log(string.Format("plan: {0} pieces, {1} re-encoded, twoStage={2}, outDur={3:0.###}", pieces == null ? 0 : pieces.Count, encCount, twoStage, outDur));
                 if (pieces != null)
@@ -518,11 +615,11 @@ namespace Chop
                         if (pc.Kind != Kind.Copy) continue;
                         string list = Path.Combine(tmp, "copy" + c + ".txt");
                         File.WriteAllText(list, "ffconcat version 1.0\n" + SourceEntry(slots[i].Start, pc.ToEof ? (double?)null : slots[i].OutDts, pc.Dur), new UTF8Encoding(false));
-                        pc.File = Path.Combine(tmp, "copy" + (c++) + ".ts");
+                        pc.File = Path.Combine(tmp, "copy" + (c++) + (IsVpx ? ".mkv" : ".ts"));
                         var args = new List<string> { "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-copyts", "-f", "concat", "-safe", "0", "-i", list,
                             "-map", "0:" + mi.Video.Index, "-c", "copy",
                             "-bsf:v", "noise=drop=" + Esc("lt(pts*tb," + Tools.F(-q) + ")+gte(pts*tb," + Tools.F(pc.Dur - q) + ")"),
-                            "-f", "mpegts", pc.File };
+                            "-f", IsVpx ? "matroska" : "mpegts", pc.File };
                         if (!RunFfmpeg(args, pc.Dur, done / total, (done + pc.Dur) / total, "Copying video…")) return Cancelled(res);
                         done += pc.Dur;
                     }
@@ -552,8 +649,16 @@ namespace Chop
                 {
                     // one audio entry per video piece, on the same gapped timeline, so both inputs stay in step
                     var sb = new StringBuilder("ffconcat version 1.0\n");
-                    foreach (var s in slots)
-                        sb.Append(SourceEntry(s.Start, s.ToEof ? (double?)null : s.End, s.Dur + Gap));
+                    // Each piece's audio is read from half a second early: MKV/WebM seeking starts audio
+                    // at the keyframe's cluster, so the packet straddling a join would otherwise be lost.
+                    // The extra audio sits in the gap before the slot and the bsf drops it; the previous
+                    // entry is shortened by the same amount so every slot still lands on its spot.
+                    Func<int, double> pre = i => i == 0 || i >= slots.Count ? 0 : Math.Min(0.5, Math.Max(0, slots[i].Start - mi.StartTime));
+                    for (int i = 0; i < slots.Count; i++)
+                    {
+                        var s = slots[i];
+                        sb.Append(SourceEntry(s.Start - pre(i), s.ToEof ? (double?)null : s.End, pre(i) + s.Dur + Gap - pre(i + 1)));
+                    }
                     string alist = Path.Combine(tmp, "audio.txt");
                     File.WriteAllText(alist, sb.ToString(), new UTF8Encoding(false));
                     for (int a = 0; a < mi.Audio.Count; a++)
@@ -599,7 +704,7 @@ namespace Chop
             finally
             {
                 res.Log = log.ToString();
-                if (tmp != null) try { Directory.Delete(tmp, true); } catch { }
+                if (tmp != null && Environment.GetEnvironmentVariable("CHOP_KEEP_TMP") != "1") try { Directory.Delete(tmp, true); } catch { }
             }
             return res;
         }

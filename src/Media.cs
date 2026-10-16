@@ -110,6 +110,7 @@ namespace Chop
         public bool AttachedPic;
         public int Channels, SampleRate;
         public double PacketDur;   // audio: true seconds per packet (0 = use each packet's own duration)
+        public bool Alpha;         // VP8/VP9 webm with a transparency channel (alpha_mode tag)
     }
 
     class MediaInfo
@@ -189,6 +190,8 @@ namespace Chop
                     if (tb.Length == 2 && long.TryParse(tb[0], out n) && long.TryParse(tb[1], out dd) && n > 0 && dd > 0) { si.TbNum = n; si.TbDen = dd; }
                     var disp = G(st, "disposition") as Dictionary<string, object>;
                     si.AttachedPic = disp != null && I(disp, "attached_pic") == 1;
+                    var tags = G(st, "tags") as Dictionary<string, object>;
+                    si.Alpha = tags != null && (S(tags, "alpha_mode") ?? S(tags, "ALPHA_MODE")) == "1";
                     var sdl = G(st, "side_data_list") as object[];
                     if (sdl != null)
                         foreach (Dictionary<string, object> sd in sdl)

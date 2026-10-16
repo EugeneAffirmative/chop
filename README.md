@@ -6,7 +6,7 @@ Open a video, press C to cut at the playhead, Delete to drop the piece you're on
 
 Exports keep the original video and audio streams, so frame rate, bitrate and quality stay the same. In Exact mode only the few frames between a cut and the next keyframe get re-encoded, at very high quality. Lossless mode doesn't re-encode anything, but cuts snap to keyframes. When you export you can rename the file or replace the original (the old one goes to the Recycle Bin).
 
-Playback is [mpv](https://mpv.io), cutting is [ffmpeg](https://ffmpeg.org). Handles mp4, mkv, mov, webm, ts and most audio files, including HDR and rotated phone video.
+Playback is [mpv](https://mpv.io), cutting is [ffmpeg](https://ffmpeg.org). Handles mp4, mkv, mov, webm, ts and most audio files, including HDR and rotated phone video. Exact cuts work for H.264, HEVC, VP9 and VP8, and transparent WebM keeps its transparency.
 
 ## Keys
 
