@@ -1,0 +1,3 @@
+# binaries: build output plus the libmpv/ffmpeg downloads (see README)
+app/*
+!app/.gitkeep
