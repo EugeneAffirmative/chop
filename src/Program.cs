@@ -18,6 +18,25 @@ namespace Chop
         static int Main(string[] args)
         {
             if (args.Length > 0 && args[0] == "--export") return Cli(args);
+            if (args.Length > 2 && args[0] == "--render-export-dialog")
+            {
+                // test hook: draws the export dialog for a file to a PNG without showing any window
+                var mi = MediaInfo.Probe(args[1]);
+                int shortSide = mi.Video != null ? Math.Min(mi.Video.Width, mi.Video.Height) : 0;
+                using (var d = new ExportDialog(1, mi.Path, Exporter.DefaultExtension(mi), "0:12.345 long", "exact cuts  ·  Tab switches in the editor", shortSide, Exporter.ResizeCodecLabel(mi)))
+                {
+                    d.NoActivateForTest = true; d.StartPosition = FormStartPosition.Manual; d.Location = new System.Drawing.Point(-12000, -12000);
+                    d.Show(); Application.DoEvents();
+                    if (args.Length > 3) d.SetResolutionForTest(int.Parse(args[3]));
+                    using (var bmp = new System.Drawing.Bitmap(d.Width, d.Height))
+                    {
+                        d.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, d.Width, d.Height));
+                        bmp.Save(args[2]);
+                    }
+                    Console.WriteLine("options: " + d.ResolutionCount);
+                }
+                return 0;
+            }
             if (args.Length > 2 && args[0] == "--selftest")
             {
                 Application.EnableVisualStyles();

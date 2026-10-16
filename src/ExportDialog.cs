@@ -217,6 +217,8 @@ namespace Chop
         public string ErrorText { get { return errorLbl.Text; } }
         public bool CanExport { get { return okBtn.Enabled; } }
         public void SetResolutionForTest(int i) { resBox.SelectedIndex = i; }
+        public bool NoActivateForTest;
+        protected override bool ShowWithoutActivation { get { return NoActivateForTest; } }
         public int ResolutionCount { get { return resBox.Items.Count; } }
     }
 }
