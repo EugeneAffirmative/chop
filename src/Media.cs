@@ -42,6 +42,24 @@ namespace Chop
             return sb.ToString();
         }
 
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern void SHChangeNotify(int eventId, uint flags, string item1, IntPtr item2);
+
+        /// <summary>
+        /// Tells Explorer a file appeared. Exports are written under a temporary name and renamed into
+        /// place, and open Explorer windows (especially Quick Access or library views) can miss that.
+        /// </summary>
+        public static void NotifyShellCreated(string file)
+        {
+            try
+            {
+                const uint PathW = 0x0005, Flush = 0x1000;
+                SHChangeNotify(0x00000002, PathW | Flush, file, IntPtr.Zero);                        // SHCNE_CREATE
+                SHChangeNotify(0x00001000, PathW | Flush, Path.GetDirectoryName(file), IntPtr.Zero); // SHCNE_UPDATEDIR
+            }
+            catch { }
+        }
+
         public static string Join(IEnumerable<string> args)
         {
             var sb = new StringBuilder();

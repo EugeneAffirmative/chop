@@ -716,6 +716,7 @@ namespace Chop
                 if (replaceOriginal) Recycle(original);
                 if (File.Exists(target)) Recycle(target);
                 File.Move(res.OutputPath, target);
+                Tools.NotifyShellCreated(target);
             }
             catch (Exception e)
             {
@@ -725,6 +726,7 @@ namespace Chop
                 {
                     keptAs = NextName(Path.GetDirectoryName(target), Path.GetFileNameWithoutExtension(target) + " (exported)", Path.GetExtension(target));
                     File.Move(res.OutputPath, keptAs);
+                    Tools.NotifyShellCreated(keptAs);
                 }
                 catch { }
                 if (released && File.Exists(original)) { loadedUrl = null; ApplyContent(play); }

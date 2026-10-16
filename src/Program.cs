@@ -116,6 +116,7 @@ namespace Chop
                 var ex = new Exporter(mi, idx);
                 var res = ex.Export(keep, args[2], args[3] == "lossless" ? ExportMode.Lossless : ExportMode.Exact);
                 Console.WriteLine(res.Log);
+                if (res.Ok) Tools.NotifyShellCreated(Path.GetFullPath(args[2]));
                 Console.WriteLine((res.Ok ? "OK: " : "FAILED: ") + res.Message);
                 foreach (var n in res.Notes) Console.WriteLine("note: " + n);
                 return res.Ok ? 0 : 1;
