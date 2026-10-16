@@ -5,7 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File register.ps1 -Uninstall remove everything it added
 param([switch]$Uninstall)
 $ErrorActionPreference = 'Stop'
-$exe = Join-Path $PSScriptRoot 'app\Chop.exe'
+$exe = Join-Path $PSScriptRoot 'Chop.exe'                                   # release zip layout
+if (-not (Test-Path $exe)) { $exe = Join-Path $PSScriptRoot 'app\Chop.exe' } # repo layout
 $exts = '.mp4', '.mkv', '.mov', '.m4v', '.webm', '.avi', '.ts', '.m2ts', '.mts', '.flv', '.wmv', '.mpg', '.mpeg', '.3gp'
 $classes = 'HKCU:\Software\Classes'
 $progId = 'Chop.Video'
@@ -27,7 +28,7 @@ if ($Uninstall) {
     Write-Host 'Chop unregistered.'
 }
 else {
-    if (-not (Test-Path $exe)) { throw "Chop.exe not found at $exe - run build.ps1 first." }
+    if (-not (Test-Path $exe)) { throw "Chop.exe not found next to this script or in app\ - run build.bat first." }
     $cmd = "`"$exe`" `"%1`""
     # ProgID the file types point at
     Set-Default "$classes\$progId" 'Video (Chop)'

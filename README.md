@@ -29,15 +29,19 @@ Playback is [mpv](https://mpv.io), cutting is [ffmpeg](https://ffmpeg.org). Hand
 
 You can also drag a segment's edges to trim it, and scroll on the timeline to zoom.
 
-## Setup
+## Download
 
-Windows 10 or 11. No SDK needed, it builds with the C# compiler that comes with Windows.
+Get the zip from [Releases](https://github.com/EugeneAffirmative/chop/releases), unzip it anywhere and run `Chop.exe`. Windows 10 or 11, 64-bit. Double-click `register.bat` if you want it as your default video player.
+
+## Building it yourself
+
+No SDK needed, it builds with the C# compiler that comes with Windows.
 
 1. Put these in the `app` folder:
    - `libmpv-2.dll` from [mpv-winbuild-cmake](https://github.com/shinchiro/mpv-winbuild-cmake/releases) (the `mpv-dev-x86_64-*.7z` download)
    - `ffmpeg.exe` and `ffprobe.exe`, version 7 or newer, from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (the essentials build is fine)
 2. Run `build.bat`. That makes `app\Chop.exe`.
-3. Optional: run `powershell -ExecutionPolicy Bypass -File register.ps1` so Chop shows up in Windows' Default apps and you can make it your video player. `register.ps1 -Uninstall` undoes it.
+3. Optional: run `register.bat` so Chop shows up in Windows' Default apps and you can make it your video player. `register.bat -Uninstall` undoes it.
 
 There's also `ChopCli.exe` for scripted cuts:
 
